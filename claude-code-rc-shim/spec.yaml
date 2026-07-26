@@ -13,10 +13,13 @@ description: >
   server-injected "Message sent at …" timestamp that breaks leading
   slash-commands in remote messages.
 
+  The shim's scripts are vendored into this kit under files/home/ (see
+  README for the upstream source and how to re-sync), so install no longer
+  clones anything and doesn't need github.com in caps.
+
 caps:
   network:
     allow:
-      - github.com
       - pypi.org
       - files.pythonhosted.org
 
@@ -24,12 +27,16 @@ commands:
   install:
     - command: |
         set -euo pipefail
-        DEST="$HOME/scoped-token-shim"
-        if [ -d "$DEST/.git" ]; then
-          git -C "$DEST" pull --ff-only
-        else
-          git clone https://github.com/cbrown1234/sbx-claude-code-rc-shim.git "$DEST"
-        fi
-        "$DEST/setup.sh"
+        "$HOME/scoped-token-shim/setup.sh"
+        mkdir -p "$HOME/.local/bin"
+        ln -sf "$HOME/scoped-token-shim/rc-claude.sh" "$HOME/.local/bin/rc-claude"
       user: "1000"
-      description: Clone the shim repo and run one-time setup (install mitmproxy, trust its CA system-wide)
+      description: One-time setup (install mitmproxy, generate + trust its CA system-wide) and symlink rc-claude onto PATH
+  startup:
+    - command:
+        - sh
+        - -c
+        - export PATH="$HOME/.local/bin:$PATH"; exec /home/agent/scoped-token-shim/run.sh > /home/agent/scoped-token-shim/run.log 2>&1
+      user: "1000"
+      background: true
+      description: Start the scoped-token shim daemon on 127.0.0.1:8080 on every sandbox boot, so it's already up before any session begins
