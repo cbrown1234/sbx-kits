@@ -81,3 +81,7 @@ commands:
       user: "1000"
       background: true
       description: One-time setup (install mitmproxy, generate + trust its CA system-wide, symlink rc-claude onto PATH), then start the scoped-token shim daemon on 127.0.0.1:8080 on every sandbox boot, then publish the proxy override to /etc/sandbox-persistent.sh once the shim is confirmed up
+
+agentContext: |
+  A /remote-control workaround (to the lack of sbx support) is in "$HOME/scoped-token-shim/
+  and should be running
