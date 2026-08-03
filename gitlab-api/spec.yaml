@@ -47,6 +47,10 @@ commands:
     - command: "glab config set -g host gitlab.com"
       user: "1000"
       description: Point glab at gitlab.com by default
+    - command: |
+        git config --global credential."https://gitlab.com".helper "!glab auth git-credential"
+      user: "1000"
+      description: git HTTPS auth
 
 agentContext: |
-  `glab` is available, with a proxy managed token
+  `glab` is available, with a proxy managed token, and configure as a git credential helper
