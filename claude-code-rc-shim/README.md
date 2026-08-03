@@ -34,34 +34,39 @@ git subtree pull --prefix=claude-code-rc-shim/files/home/scoped-token-shim \
 
 ## What this kit does
 
-A single `commands.startup` hook (`background: true`) runs the vendored
-`setup.sh`, symlinks `rc-claude.sh` onto `PATH` as `rc-claude`, and starts
-`run.sh` in the background — all on every sandbox boot. `setup.sh`:
+`commands.install` (runs once, before any session can attach) patches
+`/usr/local/lib/sandbox/start-agent` — the sandbox's own agent launcher,
+documented in its generated comment as a supported edit-as-root
+customization point — to wait briefly (bounded, ~6s) for the shim to
+actually be listening on `127.0.0.1:8080` before exporting `HTTP(S)_PROXY`
+(upper- and lower-case) and launching `claude`. This is the one guaranteed
+choke point every `claude` launch passes through, so a plain `claude` is
+routed through the shim automatically, with no `rc-claude` wrapper needed.
+If the shim isn't up within the wait, it fails open — `claude` launches
+through the sandbox's normal proxy instead of a dead one, so that session
+just won't have RC until the shim catches up (see `spec.yaml`'s
+`description` for why: the shim is killed on every sandbox auto-stop and
+has to actually come back up, so *some* bounded wait is unavoidable, but
+it should never hang indefinitely or leave `claude` pointed at nothing).
+
+A `commands.startup` hook (`background: true`, reruns on every sandbox
+boot) runs the vendored `setup.sh`, symlinks `rc-claude.sh` onto `PATH` as
+`rc-claude`, and starts `run.sh` in the background. `setup.sh`:
 
 1. Installs `mitmproxy` (isolated, via `uv tool install --python 3.12`)
 2. Generates mitmproxy's CA cert (brief headless run)
 3. Appends the CA to `/etc/ssl/certs/ca-certificates.crt` so node, python,
    and curl all trust the shim's TLS interception
 
-Everything runs from `commands.startup` rather than `commands.install`:
-kit-provided files (`files/home/`) aren't mounted into the container until
-the startup phase, so an install step can't see `setup.sh` at all — it runs
-before the mount and fails with "not found".
-
-Once `run.sh`'s `mitmdump` is confirmed actually listening on
-`127.0.0.1:8080`, the startup hook appends `HTTP(S)_PROXY`
-(upper- and lower-case) overrides to `/etc/sandbox-persistent.sh`, which
-every login shell sources (and which is exported as `BASH_ENV` for
-non-interactive bash children) — so a plain `claude` picks up the shim
-without needing the `rc-claude` wrapper. This was tried first as a
-container-level `environment.variables` override instead, which is
-inherited unconditionally by every process including other kits'
-`commands.install` steps — it broke `gitlab-api`'s install, which needs
-real internet egress before the shim exists to route through. Gating the
-publish on shim readiness avoids both that and ever pointing a new shell
-at a proxy that isn't up yet.
-
 No credentials are declared — the shim works entirely at the network layer.
+
+See `spec.yaml`'s own `description` for the full history of designs this
+kit went through to route plain `claude` through the shim: a container-
+level env override (broke another kit's install step), then a readiness-
+poll snippet sourced via `BASH_ENV` (closed the first race but couldn't
+survive sbx's auto-stop/restart cycle, since its readiness state couldn't
+carry over between separate `claude` launches), and now the start-agent
+patch described above.
 
 ## Usage
 
@@ -75,11 +80,9 @@ claude
 /remote-control
 ```
 
-If you attach right as the sandbox starts, `uv tool install` may still be
-fetching mitmproxy — a shell opened before then won't have the proxy
-override yet (check `~/scoped-token-shim/run.log` for progress). Use
-`rc-claude` in that case: it waits for the shim to become reachable before
-launching, and exits with a clear error if it never comes up.
+`rc-claude` remains available as a manual fallback: it waits for the shim
+to become reachable before launching, and exits with a clear error if it
+never comes up (check `~/scoped-token-shim/run.log` for why).
 
 ## Applying the kit
 

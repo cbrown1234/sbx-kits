@@ -26,21 +26,80 @@ description: >
   session, so setup.sh's `command -v mitmdump` check (run right after `uv
   tool install`) silently failed under `set -e` before the export was
   reordered — the script died with no error output partway through, right
-  after the uv install log lines.
+  after the uv install log lines. commands.startup re-runs on every sandbox
+  restart, not just the first boot: sandboxes auto-stop after ~30s idle and
+  rerun startup hooks fresh on the next connection, which also means the
+  shim daemon is killed and must actually come back up each time (this is
+  the crux of the routing problem below, not something a kit can prevent).
 
-  The sandbox pre-sets HTTP(S)_PROXY to its own credential-injecting
-  gateway proxy. A container-level environment.variables override was
-  tried to redirect that at the shim so plain `claude` would work with no
-  rc-claude wrapper, but it applies to every kit's commands.install too
-  (they share the same merged container env), not just the final running
-  container -- it broke gitlab-api's install step, which needs real
-  internet egress before the shim exists to route through. Instead, once
-  the shim confirms it's actually listening, the startup hook appends the
-  proxy overrides to /etc/sandbox-persistent.sh, which every login shell
-  (and BASH_ENV for non-interactive bash children) sources -- so a plain
-  `claude` picks it up without a static, install-time-unsafe container env
-  override. rc-claude.sh (still symlinked as `rc-claude`) remains as a
-  fallback for the window between sandbox start and the shim coming up.
+  setup.sh's own network calls (uv fetching mitmproxy) failed with
+  "Connection refused" even when its env-var prefix explicitly pinned
+  HTTPS_PROXY to the real gateway -- deterministically, not as a boot-
+  timing race. Root cause: BASH_ENV=/etc/sandbox-persistent.sh is a real
+  container-level env var, and setup.sh's own `#!/usr/bin/env bash`
+  shebang means bash re-sources that file at its own startup for any
+  non-interactive invocation, unconditionally -- which re-exports
+  HTTPS_PROXY=127.0.0.1:8080 (the shim, not yet listening at that point)
+  and silently clobbers the pin, regardless of what was passed in via the
+  `VAR=val command` prefix. `env -u BASH_ENV` on the call strips it so
+  setup.sh keeps the pinned gateway value. A short retry loop (3 attempts,
+  3s apart) remains as defense-in-depth for genuine transient network
+  blips, now that it isn't fighting a self-inflicted, deterministic
+  failure.
+
+  Routing plain `claude` through the shim (no rc-claude wrapper) went
+  through three designs before landing on the current one:
+
+  1. A container-level environment.variables override -- reverted because
+     it's merged into every kit's commands.install env, not just the final
+     container, and broke gitlab-api's install step (needs real internet
+     egress before the shim exists to route through).
+  2. A readiness-poll-then-export snippet appended to
+     /etc/sandbox-persistent.sh (sourced by login shells, and via BASH_ENV
+     for non-interactive bash children), written from commands.install so
+     it's present before any session can attach. This closed the original
+     "only works the second time a sbx is run" race, but broke down under
+     sbx's auto-stop/restart cycle: SCOPED_TOKEN_SHIM_READY is an exported
+     env var, scoped to one process, so it never carries over to the *next*
+     `claude` launch (a fresh, unrelated process) -- meaning every single
+     launch re-ran the full ~30s poll loop, and if that timed out (the
+     shim genuinely wasn't back up yet after a restart) the snippet still
+     unconditionally exported the shim address, leaving that session
+     pointed at a dead proxy with RC silently unreachable.
+  3. The current design: patch /usr/local/lib/sandbox/start-agent directly
+     (see commands.startup below) instead of going through
+     sandbox-persistent.sh/BASH_ENV at all. Confirmed via direct process
+     inspection (/proc/<pid>/environ on the live `claude` process, and
+     tracing its launcher) that start-agent is the one guaranteed
+     synchronous choke point every `claude` launch passes through --
+     Docker's own comment in the generated file documents it as a
+     supported edit-as-root customization point that "persists across
+     restarts." The wait is now short (~6s, not 30s: a routine restart
+     only needs an already-installed mitmdump to spawn and bind, not a
+     fresh `uv tool install`) and fails open -- if the shim isn't up in
+     time, start-agent leaves the sandbox's default gateway proxy alone
+     instead of pointing at a dead one, so `claude` still starts and works
+     normally; that session just won't have RC until the shim catches up.
+     Trade-off: this fully overwrites Docker's generated start-agent
+     rather than patching it in place, so if a future base image adds new
+     logic there, this kit's copy won't pick it up silently -- the
+     embedded case statement is a verbatim copy of the version this kit
+     was built against.
+
+  The start-agent patch had to move from commands.install to the first
+  (non-backgrounded) commands.startup entry: install runs as a bare `docker
+  run` of the raw base image, before whatever generates start-agent has run
+  at all -- tried install first and it failed outright with "No such file
+  or directory". This reopens a race in principle (startup isn't guaranteed
+  to finish before a session attaches, which is exactly why the persistent.sh
+  snippet moved to install originally), but the practical window is now a
+  single synchronous `tee` of a few hundred bytes -- milliseconds, not the
+  10+ seconds a fresh `uv tool install` could take -- so it's kept as a
+  separate, non-backgrounded startup entry that runs to completion before
+  the second (backgrounded) entry even starts.
+
+  rc-claude.sh (still symlinked as `rc-claude`) remains as a manual
+  fallback that gives a clear error if the shim never comes up.
 
 caps:
   network:
@@ -55,32 +114,86 @@ commands:
         - -c
         - |
           set -euo pipefail
+          # Not backgrounded, deliberately: must finish (a fast, synchronous
+          # file write) before this startup entry returns and the next one
+          # -- which backgrounds the slow mitmproxy setup -- even starts, so
+          # the patched launcher is in place as early in the boot as this
+          # kit can manage. See description for why this couldn't move to
+          # commands.install instead. Idempotent guard in case startup
+          # re-runs on a restart with the patch already in place.
+          if ! sudo grep -q claude-code-rc-shim /usr/local/lib/sandbox/start-agent 2>/dev/null; then
+            sudo tee /usr/local/lib/sandbox/start-agent > /dev/null <<'AGENT'
+          #!/bin/bash
+          # Patched by claude-code-rc-shim (see spec.yaml description for why):
+          # wait briefly for the local scoped-token shim on 127.0.0.1:8080, then
+          # route through it -- RC needs the Authorization header to reach it
+          # unmodified, which sbx's own forward proxy won't allow. The shim is
+          # killed on every sandbox auto-stop and must actually come back up, so
+          # this waits (bounded, ~6s) rather than assuming it's already there.
+          # Fails open: if it's not up in time, launch through the sandbox's
+          # normal proxy instead of a dead one -- this session just won't have
+          # RC until the shim catches up.
+          _shim_ready=0
+          for _i in 1 2 3 4 5 6; do
+            _code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 1 http://127.0.0.1:8080 2>/dev/null || true)"
+            if [ "$_code" != "000" ] && [ -n "$_code" ]; then
+              _shim_ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$_shim_ready" = "1" ]; then
+            export HTTPS_PROXY="http://127.0.0.1:8080" HTTP_PROXY="http://127.0.0.1:8080"
+            export https_proxy="http://127.0.0.1:8080" http_proxy="http://127.0.0.1:8080"
+          fi
+
+          # Original body below, verbatim (see start-agent's own comment: the
+          # first case keeps the agent's default options, a leading
+          # sub-command drops them, matching the CLI's historical launch
+          # behavior; user-supplied arguments are forwarded as "$@").
+          case "${1-}" in
+          -*|"") exec 'claude' '--dangerously-skip-permissions' "$@" ;;
+          *) exec 'claude' "$@" ;;
+          esac
+          AGENT
+            sudo chmod +x /usr/local/lib/sandbox/start-agent
+          fi
+      user: "1000"
+      description: Patch the sandbox's agent launcher to wait briefly for the scoped-token shim and route through it, failing open to the normal proxy if it isn't up yet
+    - command:
+        - sh
+        - -c
+        - |
+          set -euo pipefail
           export PATH="$HOME/.local/bin:$PATH"
           {
-            "$HOME/scoped-token-shim/setup.sh"
+            # Pin setup.sh's own network calls to the real gateway explicitly --
+            # never trust the ambient HTTPS_PROXY here, see note above. -u BASH_ENV
+            # is required: setup.sh's own bash shebang re-sources
+            # /etc/sandbox-persistent.sh (BASH_ENV) at its own startup, which would
+            # otherwise clobber this pin right back to the shim before it's up.
+            attempt=0
+            until env -u BASH_ENV \
+                  HTTPS_PROXY="http://gateway.docker.internal:3128" \
+                  HTTP_PROXY="http://gateway.docker.internal:3128" \
+                  https_proxy="http://gateway.docker.internal:3128" \
+                  http_proxy="http://gateway.docker.internal:3128" \
+                  "$HOME/scoped-token-shim/setup.sh"; do
+              attempt=$((attempt + 1))
+              if [ "$attempt" -ge 3 ]; then
+                echo "setup.sh failed after $attempt attempts, giving up" >&2
+                exit 1
+              fi
+              echo "setup.sh failed (attempt $attempt), retrying in 3s..." >&2
+              sleep 3
+            done
             mkdir -p "$HOME/.local/bin"
             ln -sf "$HOME/scoped-token-shim/rc-claude.sh" "$HOME/.local/bin/rc-claude"
-            "$HOME/scoped-token-shim/run.sh" &
-            RUN_PID=$!
-            # Publish the proxy override for future shells only once the shim is
-            # actually accepting connections -- never point new shells at a dead
-            # proxy. This is what lets plain `claude` work without rc-claude.
-            for i in $(seq 1 30); do
-              code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 1 http://127.0.0.1:8080 2>/dev/null || true)"
-              [ "$code" != "000" ] && [ -n "$code" ] && break
-              sleep 1
-            done
-            {
-              echo 'export HTTPS_PROXY="http://127.0.0.1:8080"'
-              echo 'export HTTP_PROXY="http://127.0.0.1:8080"'
-              echo 'export https_proxy="http://127.0.0.1:8080"'
-              echo 'export http_proxy="http://127.0.0.1:8080"'
-            } >> /etc/sandbox-persistent.sh
-            wait "$RUN_PID"
+            exec "$HOME/scoped-token-shim/run.sh"
           } > "$HOME/scoped-token-shim/run.log" 2>&1
       user: "1000"
       background: true
-      description: One-time setup (install mitmproxy, generate + trust its CA system-wide, symlink rc-claude onto PATH), then start the scoped-token shim daemon on 127.0.0.1:8080 on every sandbox boot, then publish the proxy override to /etc/sandbox-persistent.sh once the shim is confirmed up
+      description: One-time setup (install mitmproxy, generate + trust its CA system-wide, symlink rc-claude onto PATH), then start the scoped-token shim daemon on 127.0.0.1:8080 on every sandbox boot
 
 agentContext: |
   A /remote-control workaround (to the lack of sbx support) is in "$HOME/scoped-token-shim/
