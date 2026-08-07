@@ -8,7 +8,7 @@ description: >
   key management or credential wiring is needed — this kit is purely a
   network-policy cap.
 
-caps:
+permissions:
   network:
     allow:
       - gitlab.com:22

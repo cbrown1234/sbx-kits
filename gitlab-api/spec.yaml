@@ -10,7 +10,7 @@ description: >
   PRIVATE-TOKEN header at the network layer. Pair with the gitlab-ssh kit if
   you also need git push/pull over SSH.
 
-caps:
+permissions:
   network:
     allow:
       - gitlab.com
@@ -26,7 +26,7 @@ credentials:
           header: PRIVATE-TOKEN
           format: "%s"
 
-commands:
+setup:
   install:
     - command: |
         set -e

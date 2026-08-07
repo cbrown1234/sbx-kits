@@ -4,9 +4,9 @@ name: network-policy-repro
 displayName: Network Policy Repro
 description: >
   Minimal kit for reproducing that `sbx kit add` does not apply
-  caps.network.allow rules to a running sandbox.
+  permissions.network.allow rules to a running sandbox.
 
-caps:
+permissions:
   network:
     allow:
       - repro.example.com:9999

@@ -15,10 +15,10 @@ description: >
 
   The shim's scripts are vendored into this kit under files/home/ (see
   README for the upstream source and how to re-sync), so install no longer
-  clones anything and doesn't need github.com in caps.
+  clones anything and doesn't need github.com in permissions.
 
-  Setup and the daemon both run from a single commands.startup entry rather
-  than commands.install: kit-provided files (files/home/) aren't mounted
+  Setup and the daemon both run from a single setup.startup entry rather
+  than setup.install: kit-provided files (files/home/) aren't mounted
   into the container until the startup phase, so an install step can't see
   them (it runs before the mount and fails with "not found"). PATH is
   exported to include ~/.local/bin before setup.sh runs, not after: the
@@ -26,7 +26,7 @@ description: >
   session, so setup.sh's `command -v mitmdump` check (run right after `uv
   tool install`) silently failed under `set -e` before the export was
   reordered — the script died with no error output partway through, right
-  after the uv install log lines. commands.startup re-runs on every sandbox
+  after the uv install log lines. setup.startup re-runs on every sandbox
   restart, not just the first boot: sandboxes auto-stop after ~30s idle and
   rerun startup hooks fresh on the next connection, which also means the
   shim daemon is killed and must actually come back up each time (this is
@@ -51,12 +51,12 @@ description: >
   through three designs before landing on the current one:
 
   1. A container-level environment.variables override -- reverted because
-     it's merged into every kit's commands.install env, not just the final
+     it's merged into every kit's setup.install env, not just the final
      container, and broke gitlab-api's install step (needs real internet
      egress before the shim exists to route through).
   2. A readiness-poll-then-export snippet appended to
      /etc/sandbox-persistent.sh (sourced by login shells, and via BASH_ENV
-     for non-interactive bash children), written from commands.install so
+     for non-interactive bash children), written from setup.install so
      it's present before any session can attach. This closed the original
      "only works the second time a sbx is run" race, but broke down under
      sbx's auto-stop/restart cycle: SCOPED_TOKEN_SHIM_READY is an exported
@@ -67,7 +67,7 @@ description: >
      unconditionally exported the shim address, leaving that session
      pointed at a dead proxy with RC silently unreachable.
   3. The current design: patch /usr/local/lib/sandbox/start-agent directly
-     (see commands.startup below) instead of going through
+     (see setup.startup below) instead of going through
      sandbox-persistent.sh/BASH_ENV at all. Confirmed via direct process
      inspection (/proc/<pid>/environ on the live `claude` process, and
      tracing its launcher) that start-agent is the one guaranteed
@@ -86,8 +86,8 @@ description: >
      embedded case statement is a verbatim copy of the version this kit
      was built against.
 
-  The start-agent patch had to move from commands.install to the first
-  (non-backgrounded) commands.startup entry: install runs as a bare `docker
+  The start-agent patch had to move from setup.install to the first
+  (non-backgrounded) setup.startup entry: install runs as a bare `docker
   run` of the raw base image, before whatever generates start-agent has run
   at all -- tried install first and it failed outright with "No such file
   or directory". This reopens a race in principle (startup isn't guaranteed
@@ -101,13 +101,13 @@ description: >
   rc-claude.sh (still symlinked as `rc-claude`) remains as a manual
   fallback that gives a clear error if the shim never comes up.
 
-caps:
+permissions:
   network:
     allow:
       - pypi.org
       - files.pythonhosted.org
 
-commands:
+setup:
   startup:
     - command:
         - sh
@@ -119,7 +119,7 @@ commands:
           # -- which backgrounds the slow mitmproxy setup -- even starts, so
           # the patched launcher is in place as early in the boot as this
           # kit can manage. See description for why this couldn't move to
-          # commands.install instead. Idempotent guard in case startup
+          # setup.install instead. Idempotent guard in case startup
           # re-runs on a restart with the patch already in place.
           if ! sudo grep -q claude-code-rc-shim /usr/local/lib/sandbox/start-agent 2>/dev/null; then
             sudo tee /usr/local/lib/sandbox/start-agent > /dev/null <<'AGENT'

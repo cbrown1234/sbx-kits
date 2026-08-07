@@ -8,9 +8,9 @@ description: >
   open merge requests (over the API, via this kit's credential wiring).
 
 # --- Network -----------------------------------------------------------
-# v2 capabilities block: the egress allowlist. If you're on self-hosted
+# v2 permissions block: the egress allowlist. If you're on self-hosted
 # GitLab, replace gitlab.com everywhere in this file with your hostname.
-caps:
+permissions:
   network:
     allow:
       - gitlab.com
@@ -37,7 +37,7 @@ credentials:
           format: "%s"
 
 # --- Install ---------------------------------------------------------
-commands:
+setup:
   install:
     - command: |
         set -e
