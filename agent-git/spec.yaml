@@ -6,7 +6,7 @@ description: >
   Setup the agent to operate only via token auth
   with it's own git user config
 
-commands:
+setup:
   startup:
     - command:
         - sh
