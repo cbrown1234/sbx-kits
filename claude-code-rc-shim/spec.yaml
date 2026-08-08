@@ -2,6 +2,8 @@ schemaVersion: "2"
 kind: mixin
 name: claude-code-rc-shim
 displayName: Claude Code RC Scoped-Token Shim
+requires:
+  agent: claude
 description: >
   Installs the scoped-token egress shim that lets Claude Code Remote Control
   (RC) work inside an sbx sandbox. The shim is a local mitmproxy-based HTTPS
