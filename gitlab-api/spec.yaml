@@ -52,5 +52,6 @@ setup:
       user: "1000"
       description: git HTTPS auth
 
-agentContext: |
-  `glab` is available, with a proxy managed token, and configure as a git credential helper
+agentInstructions:
+  content: |
+    `glab` is available, with a proxy managed token, and configure as a git credential helper

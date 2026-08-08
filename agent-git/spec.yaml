@@ -27,7 +27,8 @@ setup:
       user: "1000"
       description: SSH-to-HTTPS rewriting
 
-agentContext: |
-  Git remotes for github.com and gitlab.com are rewritten to HTTPS and
-  authenticated by the sandbox proxy. Commits are authored as the bot account.
-  `gh` and `glab` work as normal; the real tokens are injected host-side.
+agentInstructions:
+  content: |
+    Git remotes for github.com and gitlab.com are rewritten to HTTPS and
+    authenticated by the sandbox proxy. Commits are authored as the bot account.
+    `gh` and `glab` work as normal; the real tokens are injected host-side.

@@ -195,6 +195,7 @@ setup:
       background: true
       description: One-time setup (install mitmproxy, generate + trust its CA system-wide, symlink rc-claude onto PATH), then start the scoped-token shim daemon on 127.0.0.1:8080 on every sandbox boot
 
-agentContext: |
-  A /remote-control workaround (to the lack of sbx support) is in "$HOME/scoped-token-shim/
-  and should be running
+agentInstructions:
+  content: |
+    A /remote-control workaround (to the lack of sbx support) is in "$HOME/scoped-token-shim/
+    and should be running
