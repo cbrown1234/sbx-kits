@@ -30,6 +30,13 @@ setup:
   install:
     - command: |
         set -e
+        # setup.install re-runs on every sandbox recreate, so skip the
+        # network round-trip if a prior create (or the base image) already
+        # put glab on PATH.
+        if command -v glab >/dev/null 2>&1; then
+          echo "glab already installed: $(glab --version)"
+          exit 0
+        fi
         VERSION=$(curl -sf 'https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/releases?per_page=1' \
           | grep -o '"tag_name":"[^"]*"' | head -1 | cut -d'"' -f4 | sed 's/^v//')
         ARCH=$(uname -m)
@@ -43,7 +50,7 @@ setup:
           -o /tmp/glab.tar.gz
         tar xzf /tmp/glab.tar.gz -C /usr/local/bin --strip-components=1 bin/glab
         rm /tmp/glab.tar.gz
-      description: Install latest glab binary from the GitLab Package Registry
+      description: Install latest glab binary from the GitLab Package Registry (skipped if already present)
     - command: "glab config set -g host gitlab.com"
       user: "1000"
       description: Point glab at gitlab.com by default
