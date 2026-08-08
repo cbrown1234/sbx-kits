@@ -1,0 +1,60 @@
+name: Validate kits
+
+# Runs `sbx kit validate` against every kit in this repo. This is the same
+# check `sbx` itself performs when resolving a kit (`kit "<path>": artifact:
+# invalid spec.yaml: ...`), so it catches spec.yaml drift — field renames,
+# schema-version bumps, typos — before it reaches a sandbox at runtime.
+#
+# sbx has no public installer package, so the binary is fetched straight
+# from the docker/sbx-releases GitHub releases, mirroring the download step
+# docker/sbx-kits-contrib uses in its own e2e workflow:
+# https://github.com/docker/sbx-kits-contrib/blob/main/.github/workflows/e2e.yml
+#
+# `sbx kit validate` only parses and type-checks the spec locally — it
+# doesn't need a running daemon, Docker Hub auth, or KVM — so this workflow
+# stays deliberately lighter than sbx-kits-contrib's full TCK/e2e suite.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install sbx
+        run: |
+          set -euo pipefail
+          VERSION=$(curl -fsSL https://api.github.com/repos/docker/sbx-releases/releases/latest | jq -r .tag_name)
+          echo "Resolved latest sbx release: ${VERSION}"
+          curl -fsSL \
+            "https://github.com/docker/sbx-releases/releases/download/${VERSION}/DockerSandboxes-linux-amd64.tar.gz" \
+            -o /tmp/sbx.tar.gz
+          tar xzf /tmp/sbx.tar.gz -C /tmp
+          # `sbx kit validate` only parses/type-checks locally, so we use the
+          # bare binary directly rather than running install.sh (which pulls
+          # in sandbox-runtime prerequisites like e2fsprogs that validate
+          # doesn't need).
+          sudo install -m 755 /tmp/docker-sbx/sbx /usr/local/bin/sbx
+          sbx version
+
+      - name: Validate every kit
+        run: |
+          set -euo pipefail
+          status=0
+          for f in */spec.yaml */spec.yml; do
+            [ -f "$f" ] || continue
+            kit=$(dirname "$f")
+            echo "::group::sbx kit validate ${kit}"
+            if ! sbx kit validate "./${kit}/"; then
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$status"
