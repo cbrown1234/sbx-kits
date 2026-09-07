@@ -1,0 +1,56 @@
+schemaVersion: "2"
+kind: mixin
+name: clone-repo
+displayName: Clone repo (remote)
+description: >
+  Clones a remote Git repository straight into the sandbox workspace on
+  startup, for use with a workspace-less `sbx create` (no PATH argument, so
+  nothing from the host filesystem is mounted). Pair with a network kit for
+  the target host if it isn't allowed by default (e.g. gitlab-ssh/gitlab-api
+  for gitlab.com) and with agent-git if the repo is private.
+
+args:
+  repo:
+    description: >
+      Git URL to clone (https:// or git@ — anything `git clone` accepts).
+    required: true
+  host:
+    description: >
+      Hostname to allow egress to for the clone (e.g. github.com,
+      gitlab.com, git.example.com). Set it to the host in `repo`.
+    required: true
+  ref:
+    description: Branch, tag, or commit to check out after cloning.
+    default: ""
+
+permissions:
+  network:
+    allow:
+      - ${{ kit.args.host }}
+
+setup:
+  startup:
+    - command:
+        - sh
+        - -c
+        - |
+          set -e
+          if [ -d "${WORKDIR}/.git" ]; then
+            echo "already cloned, skipping"
+            exit 0
+          fi
+          git clone "${{ kit.args.repo }}" "${WORKDIR}"
+          REF="${{ kit.args.ref }}"
+          if [ -n "$REF" ]; then
+            git -C "${WORKDIR}" checkout "$REF"
+          fi
+      user: "1000"
+      description: Clone the remote repo into the workspace (skipped if already cloned)
+
+agentInstructions:
+  content: |
+    The workspace is a fresh clone of ${{ kit.args.repo }}, not a bind-mounted
+    host directory — there is no host working tree backing it. Commits are
+    local to the sandbox until pushed; push to the real remote (`origin`) as
+    usual, with credentials from whichever auth kit (agent-git, gitlab-api,
+    gitlab-ssh) is paired with this one.

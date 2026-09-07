@@ -1,0 +1,2 @@
+repo=https://github.com/example/example.git
+host=github.com

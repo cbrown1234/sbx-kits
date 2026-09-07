@@ -52,7 +52,15 @@ jobs:
             [ -f "$f" ] || continue
             kit=$(dirname "$f")
             echo "::group::sbx kit validate ${kit}"
-            if ! sbx kit validate "./${kit}/"; then
+            # A kit with required args (e.g. clone-repo) can't validate with
+            # no values supplied; ci-args.txt sits next to spec.yaml with
+            # sample name=value pairs (see --kit-args-file) so validate has
+            # something to substitute.
+            args_flag=()
+            if [ -f "${kit}/ci-args.txt" ]; then
+              args_flag=(--kit-args-file "${kit}/ci-args.txt")
+            fi
+            if ! sbx kit validate "./${kit}/" "${args_flag[@]}"; then
               status=1
             fi
             echo "::endgroup::"
