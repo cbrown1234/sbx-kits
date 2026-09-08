@@ -37,22 +37,24 @@ setup:
         - -c
         - |
           set -e
-          if [ -d "${WORKDIR}/.git" ]; then
+          TARGET="${HOME:-/home/agent}/workspace"
+          if [ -d "$TARGET/.git" ]; then
             echo "already cloned, skipping"
             exit 0
           fi
-          git clone "${{ kit.args.repo }}" "${WORKDIR}"
+          git clone "${{ kit.args.repo }}" "$TARGET"
           REF="${{ kit.args.ref }}"
           if [ -n "$REF" ]; then
-            git -C "${WORKDIR}" checkout "$REF"
+            git -C "$TARGET" checkout "$REF"
           fi
       user: "1000"
       description: Clone the remote repo into the workspace (skipped if already cloned)
 
 agentInstructions:
   content: |
-    The workspace is a fresh clone of ${{ kit.args.repo }}, not a bind-mounted
-    host directory — there is no host working tree backing it. Commits are
-    local to the sandbox until pushed; push to the real remote (`origin`) as
-    usual, with credentials from whichever auth kit (agent-git, gitlab-api,
-    gitlab-ssh) is paired with this one.
+    The workspace is a fresh clone of ${{ kit.args.repo }} at
+    $HOME/workspace, not a bind-mounted host directory — there is no host
+    working tree backing it. cd there if you don't start out in it. Commits
+    are local to the sandbox until pushed; push to the real remote (`origin`)
+    as usual, with credentials from whichever auth kit (agent-git,
+    gitlab-api, gitlab-ssh) is paired with this one.

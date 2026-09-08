@@ -7,9 +7,11 @@ filesystem is ever exposed to the sandbox, only the repo you name.
 
 ## How it works
 
-`setup.startup` runs `git clone <repo> ${WORKDIR}` (skipped if the workspace
-is already a git checkout, so it's safe across sandbox restarts), then
-checks out `ref` if one was given.
+`setup.startup` runs `git clone <repo> $HOME/workspace` (skipped if that
+directory is already a git checkout, so it's safe across sandbox restarts),
+then checks out `ref` if one was given. There's no bind-mounted workspace
+path to clone into for a workspace-less sandbox, so the target is a fixed
+directory under the agent user's home rather than anything host-supplied.
 
 ## Args
 
