@@ -17,8 +17,10 @@ args:
   host:
     description: >
       Hostname to allow egress to for the clone (e.g. github.com,
-      gitlab.com, git.example.com). Set it to the host in `repo`.
-    required: true
+      gitlab.com, git.example.com). Set it to the host in `repo`. Leave unset
+      if a paired kit (e.g. gitlab-ssh, gitlab-api, agent-git) already opens
+      egress to that host — this kit adds no allow rule of its own then.
+    default: ""
   ref:
     description: Branch, tag, or commit to check out after cloning.
     default: ""

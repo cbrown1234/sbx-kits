@@ -16,12 +16,18 @@ checks out `ref` if one was given.
 | Name   | Required | Description                                                        |
 | ------ | -------- | ------------------------------------------------------------------- |
 | `repo` | yes      | Git URL to clone (`https://` or `git@` — anything `git clone` takes) |
-| `host` | yes      | Hostname to allow egress to — set it to the host in `repo`           |
+| `host` | no       | Hostname to allow egress to — set it to the host in `repo`           |
 | `ref`  | no       | Branch, tag, or commit to check out after cloning                    |
 
 `host` exists because the kit's own network allowlist is built from it
 (`permissions.network.allow: [${{ kit.args.host }}]`) — declare it
 separately rather than parsing it out of `repo`.
+
+Leave `host` unset if a paired kit (`agent-git`, `gitlab-api`, `gitlab-ssh`)
+already opens egress to that host — an unset `host` adds no allow rule at
+all, rather than an empty one, so nothing is opened twice. Set it whenever
+`repo` points somewhere those kits don't cover (a self-hosted Git server, for
+example), or the clone will fail against the default-deny network policy.
 
 ## Usage
 
@@ -35,6 +41,24 @@ sbx create claude \
 
 Note there's no `PATH` argument to `sbx create` — that's what skips the
 workspace bind mount.
+
+Or declaratively, in an `sbxenv.yaml`:
+
+```yaml
+schemaVersion: "1"
+name: my-project
+agent: claude
+kits:
+  - source: /path/to/sbx-kits/clone-repo/
+    args:
+      repo: https://github.com/you/your-repo.git
+      host: github.com
+      ref: main
+```
+
+No `workspace:` key, for the same reason there's no `PATH` above — declaring
+one would bind-mount a host directory, which defeats the point of this kit.
+Run it with `sbx env run`.
 
 ## Auth for private repos
 
