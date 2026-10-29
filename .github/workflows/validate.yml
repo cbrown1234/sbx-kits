@@ -14,7 +14,8 @@ name: Validate kits
 # https://github.com/docker/sbx-kits-contrib/blob/main/scripts/README.md
 #
 # sbx-kits-contrib is pinned to a commit so a change there can't break this
-# repo's CI unannounced; bump SBX_KITS_CONTRIB_REF to pick up newer spec rules.
+# repo's CI unannounced. Renovate opens a PR to bump SBX_KITS_CONTRIB_REF to
+# the latest main commit each week (see .github/renovate.json5).
 
 on:
   push:

@@ -1,0 +1,40 @@
+{
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  extends: [
+    // config:recommended plus digest pinning for actions and images,
+    // automatic config migration and abandoned-package detection.
+    'config:best-practices',
+    // Everything here is CI tooling; there's no reason to bump it more than
+    // once a week.
+    'schedule:weekly',
+  ],
+  packageRules: [
+    {
+      // Hold freshly published action releases for a few days so a
+      // compromised or broken release has time to be noticed and pulled.
+      matchManagers: ['github-actions'],
+      minimumReleaseAge: '3 days',
+    },
+    {
+      // Every dependency in this repo only affects CI, so commit as
+      // `ci(deps): ...` rather than the default `fix(deps): ...`.
+      matchManagers: ['github-actions', 'custom.regex'],
+      semanticCommitType: 'ci',
+    },
+  ],
+  customManagers: [
+    {
+      // validate.yml checks out docker/sbx-kits-contrib at a pinned commit
+      // to build its kit validator. The repo's tags lag main by weeks, so
+      // track main's latest commit instead.
+      customType: 'regex',
+      description: 'Pinned docker/sbx-kits-contrib commit used by the validate workflow',
+      managerFilePatterns: ['/^\\.github/workflows/validate\\.ya?ml$/'],
+      matchStrings: ['SBX_KITS_CONTRIB_REF:\\s*(?<currentDigest>[0-9a-f]{40})'],
+      datasourceTemplate: 'git-refs',
+      depNameTemplate: 'docker/sbx-kits-contrib',
+      packageNameTemplate: 'https://github.com/docker/sbx-kits-contrib',
+      currentValueTemplate: 'main',
+    },
+  ],
+}
