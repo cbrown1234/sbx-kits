@@ -24,17 +24,13 @@
   ],
   customManagers: [
     {
-      // validate.yml checks out docker/sbx-kits-contrib at a pinned commit
-      // to build its kit validator. The repo's tags lag main by weeks, so
-      // track main's latest commit instead.
+      // validate.yml pins the sandbox-kit frontend that CI validates kits
+      // with. Renovate keeps the `3` tag and bumps the digest.
       customType: 'regex',
-      description: 'Pinned docker/sbx-kits-contrib commit used by the validate workflow',
+      description: 'Pinned docker/sandbox-kit frontend used by the validate workflow',
       managerFilePatterns: ['/^\\.github/workflows/validate\\.ya?ml$/'],
-      matchStrings: ['SBX_KITS_CONTRIB_REF:\\s*(?<currentDigest>[0-9a-f]{40})'],
-      datasourceTemplate: 'git-refs',
-      depNameTemplate: 'docker/sbx-kits-contrib',
-      packageNameTemplate: 'https://github.com/docker/sbx-kits-contrib',
-      currentValueTemplate: 'main',
+      matchStrings: ['SANDBOX_KIT_FRONTEND:\\s*(?<depName>docker/sandbox-kit):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[0-9a-f]{64})'],
+      datasourceTemplate: 'docker',
     },
   ],
 }

@@ -7,7 +7,7 @@ filesystem is ever exposed to the sandbox, only the repo you name.
 
 ## How it works
 
-`setup.startup` runs `git clone <repo> $HOME/workspace` (skipped if that
+A `lifecycle@1` startup hook runs `git clone <repo> $HOME/workspace` (skipped if that
 directory is already a git checkout, so it's safe across sandbox restarts),
 then checks out `ref` if one was given. There's no bind-mounted workspace
 path to clone into for a workspace-less sandbox, so the target is a fixed
@@ -18,18 +18,20 @@ directory under the agent user's home rather than anything host-supplied.
 | Name   | Required | Description                                                        |
 | ------ | -------- | ------------------------------------------------------------------- |
 | `repo` | yes      | Git URL to clone (`https://` or `git@` — anything `git clone` takes) |
-| `host` | no       | Hostname to allow egress to — set it to the host in `repo`           |
+| `host` | yes      | Hostname to allow egress to — set it to the host in `repo`           |
 | `ref`  | no       | Branch, tag, or commit to check out after cloning                    |
 
-`host` exists because the kit's own network allowlist is built from it
-(`permissions.network.allow: [${{ kit.args.host }}]`) — declare it
-separately rather than parsing it out of `repo`.
+`host` exists because the kit's own runtime network allow list is built from
+it (`network-policy@1` → `runtime.allow: [<host>]`) — declare it separately
+rather than parsing it out of `repo`.
+It must be a lowercase DNS name (no IP address), because it's also the server
+the kit's SSH agent grant is limited to.
 
-Leave `host` unset if a paired kit (`agent-git`, `gitlab-api`, `gitlab-ssh`)
-already opens egress to that host — an unset `host` adds no allow rule at
-all, rather than an empty one, so nothing is opened twice. Set it whenever
-`repo` points somewhere those kits don't cover (a self-hosted Git server, for
-example), or the clone will fail against the default-deny network policy.
+`host` is required. In the v2 kit it could be left unset when a paired kit
+(`agent-git`, `gitlab-api`) already opened egress to that host,
+but v3 rejects an empty host in a network-policy entry. Setting it to a host a
+paired kit already allows is harmless: allow lists from every kit in the
+composition are unioned and deduplicated.
 
 ## Usage
 
@@ -67,10 +69,17 @@ Run it with `sbx env run`.
 This kit only clones and opens network egress to `host`; it does not wire up
 credentials. Pair it with:
 
-- [`agent-git`](../agent-git/) for GitHub/GitLab HTTPS token auth (rewrites
-  SSH remotes to HTTPS too, so a `git@` URL in `repo` still works)
-- [`gitlab-ssh`](../gitlab-ssh/) if you'd rather clone over SSH from
-  gitlab.com
+- [`agent-git`](../agent-git/) for GitHub/GitLab HTTPS token auth. This kit
+  declares `integrates: ["agent-git"]`, so when both are loaded agent-git's
+  startup hooks run first: its SSH-to-HTTPS rewrite applies to the clone,
+  and a `git@github.com:` or `git@gitlab.com:` `repo` is cloned over HTTPS.
+- upstream [`docker.io/sbx/gitlab-ssh`](https://github.com/docker/sbx-kits-contrib/tree/v3/gitlab-ssh)
+  if you'd rather clone over SSH from gitlab.com. Its agent request is
+  required, so creating the sandbox fails if your host has no SSH agent.
+
+For `git@` URLs this kit requests your host's SSH agent itself
+(`ssh-agent@1`, limited to logins to `host`), so the clone can authenticate
+with your keys. The request is optional, and HTTPS clones don't use it.
 
 ## vs. `sbx create --clone`
 

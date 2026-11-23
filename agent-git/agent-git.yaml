@@ -1,0 +1,78 @@
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+displayName: Agent git
+description: >
+  Setup the agent to operate only via token auth
+  with it's own git user config
+
+# The kit's own version, not anything it installs. It versions the
+# `agent-git` provide below, which publishing requires.
+version: "1.0.0"
+
+# Lets other kits order themselves after this one. clone-repo declares
+# `integrates: ["agent-git"]`, so when both are composed this kit's startup
+# hooks (identity + SSH-to-HTTPS rewrite) run before its clone.
+provides: ["agent-git"]
+
+args:
+  # The identity is delivered through the environment (`env:`) rather than
+  # spliced into the hook's shell string, so any value, including one with
+  # quotes in it, reaches git verbatim.
+  name:
+    description: Git user.name for the agent's commits
+    default: "Sandbox Agent"
+    # Rejects an empty name at create time; git refuses to commit with one.
+    pattern: '^[^\r\n]+$'
+    env: AGENT_GIT_USER_NAME
+  email:
+    description: >
+      Git user.email for the agent's commits. Git needs one to commit, but it
+      needn't be a real inbox: the default uses the reserved .invalid domain.
+      Use the bot account's noreply address (e.g.
+      <id>+<user>@users.noreply.github.com) to link commits to it.
+    default: "agent@sandbox.invalid"
+    # Loose shape check only: something@something, no whitespace.
+    pattern: '^[^@\s]+@[^@\s]+$'
+    env: AGENT_GIT_USER_EMAIL
+
+capabilities:
+  # Both hooks only write ~/.gitconfig: no network, so no network policy.
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      startup:
+        - command:
+            - sh
+            - -c
+            - |
+              git config --global user.name "$AGENT_GIT_USER_NAME" &&
+              git config --global user.email "$AGENT_GIT_USER_EMAIL"
+          user: "1000"
+          # Hook env is deny-by-default in v3.
+          env: [AGENT_GIT_USER_NAME, AGENT_GIT_USER_EMAIL]
+          description: Agent identity
+        # TODO: the gitlab.com rewrite relies on git over HTTPS being
+        # authenticated, which today needs gitlab-api's custom secret. If
+        # GitLab auth moves to upstream docker.io/sbx/gitlab + gitlab-ssh
+        # (SSH for git), drop the two gitlab.com lines. Depends on
+        # https://github.com/docker/sbx-releases/issues/596
+        - command:
+            - sh
+            - -c
+            - |
+              git config --global --replace-all url."https://github.com/".insteadOf "git@github.com:" &&
+              git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/" &&
+              git config --global --replace-all url."https://gitlab.com/".insteadOf "git@gitlab.com:" &&
+              git config --global --add url."https://gitlab.com/".insteadOf "ssh://git@gitlab.com/"
+          user: "1000"
+          description: SSH-to-HTTPS rewriting
+
+  # Inline content, so it can name the configured identity (a contentFile
+  # body is never arg-expanded).
+  - type: com.docker.sandbox/agent-context@1
+    config:
+      content: |
+        Git remotes for github.com and gitlab.com are rewritten to HTTPS and
+        authenticated by the sandbox proxy. Commits are authored as
+        ${{ kit.args.name }} <${{ kit.args.email }}>.
+        `gh` and `glab` work as normal; the real tokens are injected host-side.

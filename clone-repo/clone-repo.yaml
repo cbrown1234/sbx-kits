@@ -1,0 +1,100 @@
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+displayName: Clone repo (remote)
+description: >
+  Clones a remote Git repository straight into the sandbox workspace on
+  startup, for use with a workspace-less `sbx create` (no PATH argument, so
+  nothing from the host filesystem is mounted). Pair with a network kit for
+  the target host if it isn't allowed by default (e.g. gitlab-api, or
+  docker.io/sbx/gitlab-ssh for gitlab.com) and with agent-git if the repo is private.
+
+# Soft dependency on agent-git: when it's in the composition, its startup
+# hooks (including the SSH-to-HTTPS rewrite) run before this kit's clone, so
+# a `git@github.com:`/`git@gitlab.com:` repo is cloned over HTTPS with proxy
+# auth. Without agent-git this kit composes as before.
+integrates: ["agent-git"]
+
+args:
+  repo:
+    description: >
+      Git URL to clone (https:// or git@ — anything `git clone` accepts).
+    required: true
+  # MIGRATION NOTE: `host` was optional (default "") in v2, so a kit paired
+  # with gitlab-api/agent-git could skip its own allow rule. v3
+  # rejects an empty host in a network-policy entry after create-time
+  # expansion, so it is required now. Restating a host another kit already
+  # allows is harmless: allow lists union and dedupe across the composition.
+  host:
+    description: >
+      Hostname to allow egress to for the clone (e.g. github.com,
+      gitlab.com, git.example.com). Set it to the host in `repo`.
+    required: true
+    # Bare lowercase DNS name: no scheme, path, port, IP address or shell
+    # metacharacters. ssh-agent@1's `authenticate` only accepts a lowercase
+    # DNS name, so the last label must contain a letter.
+    pattern: '^([a-z0-9-]+\.)*[a-z0-9-]*[a-z][a-z0-9-]*$'
+  ref:
+    description: Branch, tag, or commit to check out after cloning.
+    default: ""
+
+capabilities:
+  # runtime, not install: the clone is a startup hook, and startup hooks run
+  # at boot, which is the runtime phase.
+  - type: com.docker.sandbox/network-policy@1
+    config:
+      runtime:
+        allow:
+          - ${{ kit.args.host }}
+
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      startup:
+        - command:
+            - sh
+            - -c
+            - |
+              set -e
+              TARGET="${HOME:-/home/agent}/workspace"
+              if [ -d "$TARGET/.git" ]; then
+                echo "already cloned, skipping"
+                exit 0
+              fi
+              git clone "${{ kit.args.repo }}" "$TARGET"
+              REF="${{ kit.args.ref }}"
+              if [ -n "$REF" ]; then
+                git -C "$TARGET" checkout "$REF"
+              fi
+          user: "1000"
+          # Hook env is deny-by-default in v3. git reaches the remote through
+          # the sandbox proxy (HTTPS) or the forwarded SSH agent (git@ URLs,
+          # via the ssh-agent@1 entry below; a startup hook only gets
+          # SSH_AUTH_SOCK when it lists it here).
+          env: [HTTP_PROXY, HTTPS_PROXY, NO_PROXY, SSH_AUTH_SOCK]
+          description: Clone the remote repo into the workspace (skipped if already cloned)
+
+  # MIGRATION NOTE: v2 forwarded the host's SSH agent automatically; v3
+  # needs this request. It's for `git@` repo URLs; HTTPS clones don't use it.
+  # Runtime phase, because the clone is a startup hook. Bounded to logins
+  # to `host` (any user), and optional so HTTPS-only setups without a host
+  # agent still start.
+  - type: com.docker.sandbox/ssh-agent@1
+    optional: true
+    description: Host SSH agent for cloning git@ URLs
+    config:
+      phase: runtime
+      unrestricted: false
+      authenticate:
+        - ${{ kit.args.host }}
+
+  # Inline `content:`, not a contentFile: the body names the `repo` arg, and
+  # a staged contentFile body is never arg-expanded.
+  - type: com.docker.sandbox/agent-context@1
+    config:
+      content: |
+        The workspace is a fresh clone of ${{ kit.args.repo }} at
+        $HOME/workspace, not a bind-mounted host directory — there is no host
+        working tree backing it. cd there if you don't start out in it. Commits
+        are local to the sandbox until pushed; push to the real remote (`origin`)
+        as usual, with credentials from whichever auth kit (agent-git,
+        gitlab-api, or an SSH kit) is paired with this one.

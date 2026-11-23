@@ -1,0 +1,93 @@
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+displayName: GitLab (API — glab + token auth)
+description: >
+  Installs the glab CLI and sets up git over HTTPS for gitlab.com, both
+  authenticated by a host-side sbx custom secret. The sandbox only ever sees
+  the placeholder "proxy-managed" in GITLAB_TOKEN; the proxy swaps in the real
+  token on requests to gitlab.com. Pair with docker.io/sbx/gitlab-ssh if you
+  also need git push/pull over SSH.
+
+# Auth comes from a custom secret (`sbx secret set-custom`), not from a
+# credential@1 entry. A custom secret swaps the placeholder wherever it
+# appears in a request to gitlab.com: PRIVATE-TOKEN and Bearer for glab and the
+# API, and the Basic password git sends over HTTPS. A kit credential rewrites
+# one header in one format per service, so it can't cover the API and git on
+# the same host. See gitlab-api/probe-auth.sh for the checks behind this.
+#
+# TODO: switch to a credential@1 entry, or to upstream docker.io/sbx/gitlab
+# with only the git credential helper hook below, once sbx supports
+# scheme-aware injection on one domain:
+#   https://github.com/docker/sbx-releases/issues/596
+#   (GitLab's case: https://github.com/docker/sbx-releases/issues/552)
+#   `scheme: basic` alone was fixed in sbx v0.45.0:
+#   https://github.com/docker/sbx-kits-contrib/issues/168
+# TO CHECK: on sbx v0.54.0 (stable) even upstream docker.io/sbx/gitlab's own
+# credential was never injected (`sbx policy log` showed forward-bypass for
+# gitlab.com), with a `gitlab` service secret stored and its gitlab.com
+# binding approved. Upstream's README says v3 needs an sbx release candidate
+# or nightly; re-run probe-auth.sh there before relying on kit credentials.
+
+capabilities:
+  # install: the glab release lookup and download in the install hook.
+  # runtime: glab's API traffic and git over HTTPS. The custom secret doesn't
+  # open egress, so gitlab.com has to be allowed here.
+  - type: com.docker.sandbox/network-policy@1
+    config:
+      install:
+        allow:
+          - gitlab.com
+      runtime:
+        allow:
+          - gitlab.com
+
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      install:
+        - command: |
+            set -e
+            # install re-runs on every sandbox recreate, so skip the
+            # network round-trip if a prior create (or the base image)
+            # already put glab on PATH.
+            if command -v glab >/dev/null 2>&1; then
+              echo "glab already installed: $(glab --version)"
+              exit 0
+            fi
+            VERSION=$(curl -sf 'https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/releases?per_page=1' \
+              | grep -o '"tag_name":"[^"]*"' | head -1 | cut -d'"' -f4 | sed 's/^v//')
+            ARCH=$(uname -m)
+            case "$ARCH" in
+              x86_64)  ARCH=amd64  ;;
+              aarch64) ARCH=arm64  ;;
+              armv6l)  ARCH=armv6  ;;
+              i386|i686) ARCH=386  ;;
+            esac
+            curl -sfL "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/packages/generic/glab/${VERSION}/glab_${VERSION}_linux_${ARCH}.tar.gz" \
+              -o /tmp/glab.tar.gz
+            tar xzf /tmp/glab.tar.gz -C /usr/local/bin --strip-components=1 bin/glab
+            rm /tmp/glab.tar.gz
+          # Hook env is deny-by-default in v3; curl needs the proxy vars.
+          env: [HTTP_PROXY, HTTPS_PROXY, NO_PROXY]
+          description: Install latest glab binary from the GitLab Package Registry (skipped if already present)
+        - command: "glab config set -g host gitlab.com"
+          user: "1000"
+          description: Point glab at gitlab.com by default
+        # Hands git the placeholder from GITLAB_TOKEN as the Basic password
+        # (GitLab's git endpoints accept only Basic auth), and the proxy
+        # swaps in the real token. Reads the env directly rather than going
+        # through `glab auth git-credential`, so it works whichever kit
+        # provides glab.
+        - command: |
+            git config --global credential."https://gitlab.com".helper \
+              '!f() { echo username=oauth2; echo "password=$GITLAB_TOKEN"; }; f'
+          user: "1000"
+          description: git HTTPS auth
+
+  - type: com.docker.sandbox/agent-context@1
+    config:
+      content: |
+        `glab` is available and authenticated for gitlab.com, and git over
+        HTTPS to gitlab.com is authenticated through a credential helper.
+        `GITLAB_TOKEN` holds the placeholder `proxy-managed`; the sandbox
+        proxy swaps in the real token on requests to gitlab.com only.
